@@ -1,138 +1,205 @@
 from urlextract import URLExtract
+extractor = URLExtract()
+
 from wordcloud import WordCloud
 import pandas as pd
 from collections import Counter
 import emoji
+from textblob import TextBlob
+import re
 
-extract = URLExtract()
 
-def fetch_stats(selected_user,df):
-
+def fetch_stats(selected_user, df):
     if selected_user != 'Overall':
         df = df[df['user'] == selected_user]
 
-    #fetch the number of messages
     num_messages = df.shape[0]
 
-    #fetch the total number of words
     words = []
-    for message in df['message']:
-        words.extend(message.split())
+    for msg in df['message']:
+        words.extend(msg.split())
 
-    #fetch number of media messages
-    num_media_messages =  df[df['message'] == '<Media omitted>\n'].shape[0]
+    num_of_media = df[df['message'] == '<Media omitted>\n'].shape[0]
 
-    #fetch number of links shared
     links = []
-    for message in df['message']:
-        links.extend(extract.find_urls(message))
+    for msg in df['message']:
+        links.extend(extractor.find_urls(msg))
 
+    return num_messages, len(words), num_of_media, len(links)
 
-
-    return num_messages,len(words),num_media_messages,len(links)
 
 def most_busy_users(df):
-    x = df['user'].value_counts().head()
-    df = round((df['user'].value_counts()/df.shape[0])*100,2).reset_index().rename(columns={'user':'name','count':'percent'})
-    return x,df
+    x = df[df['user'] != 'group_notification']['user'].value_counts().head()
 
-def create_wordcloud_df(selected_user,df):
+    df_percent = (
+        df[df['user'] != 'group_notification']['user']
+        .value_counts(normalize=True)
+        .mul(100)
+        .round(2)
+        .reset_index()
+        .rename(columns={'user': 'Name', 'proportion': 'Percent'})
+    )
 
-    f = open('stop_hinglish.txt','r')
-    stop_words = f.read()
+    return x, df_percent
 
-    if selected_user != 'Overall':
-        df = df[df['user'] == selected_user]
 
-    temp = df[df['user'] != 'group_notification']
-    temp = temp[temp['message'] != '<Media omitted>\n']
-
-    def remove_stop_words(message):
-        y = []
-        for word in message.lower().split():
-            if word not in stop_words:
-                y.append(word)
-        return " ".join(y)
-
-    wc = WordCloud(width=500,height=500,min_font_size=10,background_color='white')
-    temp['message'] = temp['message'].apply(remove_stop_words)
-    df_wc = wc.generate(temp['message'].str.cat(sep=" "))
-    return df_wc
-
-def most_common_words(selected_user,df):
-
-    f = open('stop_hinglish.txt','r')
-    stop_words = f.read()
+def create_word_cloud(selected_user, df):
+    with open('stop_hinglish.txt', 'r') as f:
+        stop_words = f.read().split()
 
     if selected_user != 'Overall':
         df = df[df['user'] == selected_user]
 
-    temp = df[df['user'] != 'group_notification']
-    temp = temp[temp['message'] != '<Media omitted>\n']
+    temp = df[
+        (df['user'] != 'group_notification') &
+        (df['message'] != '<Media omitted>\n') &
+        (~df['message'].str.contains('deleted', case=False, na=False))
+    ].copy()
+
+    def clean_text(message):
+        message = re.sub(r'[^a-zA-Z\s]', '', message)
+
+        return " ".join(
+            word for word in message.lower().split()
+            if word not in stop_words and len(word) > 2
+        )
+
+    temp['message'] = temp['message'].apply(clean_text)
+
+    text = " ".join(
+        temp['message']
+        .dropna()
+        .astype(str)
+        .str.strip()
+    )
+    if not text:
+        return None
+
+    wc = WordCloud(width=500, height=400, min_font_size=10, background_color='white')
+    return wc.generate(text)
+
+
+def most_comm_words(selected_user, df):
+    with open('stop_hinglish.txt', 'r') as f:
+        stop_words = f.read().split()
+
+    if selected_user != 'Overall':
+        df = df[df['user'] == selected_user]
+
+    temp = df[
+        (df['user'] != 'group_notification') &
+        (df['message'] != '<Media omitted>\n') &
+        (~df['message'].str.contains('deleted', case=False, na=False))
+    ]
 
     words = []
+    for msg in temp['message']:
+        msg = re.sub(r'[^a-zA-Z\s]', '', msg)
 
-    for message in temp['message']:
-        for word in message.lower().split():
-            if word not in stop_words:
+        for word in msg.lower().split():
+            if word not in stop_words and len(word) > 2:
                 words.append(word)
 
-    most_common_df = pd.DataFrame(Counter(words).most_common(50))
-    return most_common_df
+    return pd.DataFrame(
+    Counter(words).most_common(15),
+    columns=['word', 'count']
+)
 
-def emoji_helper(selected_user,df):
+
+def emoji_helper(selected_user, df):
     if selected_user != 'Overall':
         df = df[df['user'] == selected_user]
 
-    emojis = []
-    for message in df['message']:
-        emojis.extend([c for c in message if c in emoji.EMOJI_DATA])
+    emojis = [
+        char
+        for msg in df['message']
+        for char in msg
+        if emoji.is_emoji(char)
+    ]
 
-    emoji_df =  pd.DataFrame(Counter(emojis).most_common(len(Counter(emojis))))
+    if not emojis:
+        return pd.DataFrame(columns=['emoji', 'count'])
 
-    return emoji_df
+    return pd.DataFrame(Counter(emojis).most_common(), columns=['emoji', 'count'])
 
-def monthly_timeline(selected_user,df):
+
+def monthly_timeline(selected_user, df):
     if selected_user != 'Overall':
         df = df[df['user'] == selected_user]
 
-    timeline = df.groupby(['year', 'month_num', 'month']).count()['message'].reset_index()
+    timeline = df.groupby(['year', 'month', 'month_num']).count()['message'].reset_index()
+    timeline = timeline.sort_values(['year', 'month_num'])
 
-    time = []
-    for i in range(timeline.shape[0]):
-        time.append(timeline['month'][i] + "-" + str(timeline['year'][i]))
-
-    timeline['time'] = time
+    timeline['time'] = timeline['month'] + "-" + timeline['year'].astype(str)
 
     return timeline
 
-def daily_timeline(selected_user,df):
 
+def week_activity_map(selected_user, df):
     if selected_user != 'Overall':
         df = df[df['user'] == selected_user]
-
-    daily_timeline = df.groupby('only_date').count()['message'].reset_index()
-
-    return daily_timeline
-
-def week_activity_map(selected_user,df):
-    if selected_user != 'Overall':
-      df = df[df['user'] == selected_user]
 
     return df['day_name'].value_counts()
 
 
-def month_activity_map(selected_user,df):
-    if selected_user != 'Overall':
-      df = df[df['user'] == selected_user]
-
-    return df['month'].value_counts()
-
-
-def activity_heatmap(selected_user,df):
+def hour_activity_map(selected_user, df):
     if selected_user != 'Overall':
         df = df[df['user'] == selected_user]
 
-    user_heatmap = df.pivot_table(index='day_name', columns='period', values='message', aggfunc='count').fillna(0)
+    hour_count = df['hour'].value_counts().sort_index()
 
-    return user_heatmap
+    labels = []
+    for h in hour_count.index:
+        if h == 0:
+            labels.append('12 AM')
+        elif h < 12:
+            labels.append(f'{h} AM')
+        elif h == 12:
+            labels.append('12 PM')
+        else:
+            labels.append(f'{h - 12} PM')
+
+    hour_count.index = labels
+    return hour_count
+
+
+def sentiment_analysis(selected_user, df):
+    if selected_user != 'Overall':
+        df = df[df['user'] == selected_user]
+
+    df = df.copy()
+
+    df['sentiment'] = df['message'].apply(
+        lambda msg: 'Positive' if TextBlob(msg).sentiment.polarity > 0
+        else 'Negative' if TextBlob(msg).sentiment.polarity < 0
+        else 'Neutral'
+    )
+
+    return df['sentiment'].value_counts()
+
+
+def sentiment_timeline(selected_user, df):
+    if selected_user != 'Overall':
+        df = df[df['user'] == selected_user]
+
+    df = df[df['user'] != 'group_notification'].copy()
+
+    df['sentiment'] = df['message'].apply(
+        lambda msg: 'Positive' if TextBlob(msg).sentiment.polarity > 0
+        else 'Negative' if TextBlob(msg).sentiment.polarity < 0
+        else 'Neutral'
+    )
+
+    return df.groupby(['only_date', 'sentiment']).size().unstack().fillna(0)
+
+
+def sentiment_by_user(df):
+    df = df[df['user'] != 'group_notification'].copy()
+
+    df['sentiment'] = df['message'].apply(
+        lambda msg: 'Positive' if TextBlob(msg).sentiment.polarity > 0
+        else 'Negative' if TextBlob(msg).sentiment.polarity < 0
+        else 'Neutral'
+    )
+
+    return df.groupby(['user', 'sentiment']).size().unstack().fillna(0)
