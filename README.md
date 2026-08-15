@@ -56,7 +56,7 @@ An interactive data analysis web app that extracts insights from WhatsApp chat e
 ├── helper.py           # Analysis & visualization functions
 ├── preprocessor.py     # Data cleaning & preprocessing
 ├── stop_hinglish.txt   # Stopwords file
-├── .gitignore
+├── requirments.txt
 ```
 
 ---
@@ -105,7 +105,6 @@ streamlit run app.py
 ## 🌟 Future Improvements
 
 * Deploy app online (Streamlit Cloud)
-* Add sentiment analysis
 * Improve UI/UX
 * Support multiple chat formats
 
